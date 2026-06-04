@@ -109,14 +109,16 @@ def fetch_detail(code):
         html = resp.text
 
         # Parse header info
-        # Format: CallVol:236472 PutVol:61571 CPRatio:3.84 CallOI:568342 PutOI:146844 CPutOIRatio:3.87USD 5.17
-        # Note: no space between CPutOIRatio value and "USD"
+        # Format: CallVol: 252871 PutVol: 56970 &nbsp;&nbsp;&nbsp;CPRatio:4.44 ... CPutOIRatio:3.87USD 5.17
+        # Note: &nbsp; entities between fields, no space between CPutOIRatio value and "USD"
+        # First, normalize &nbsp; to spaces
+        html_clean = html.replace('&nbsp;', ' ')
         header = {}
         header_match = re.search(
-            r'CallVol:([\d.]+)\s*PutVol:([\d.]+)\s*CPRatio:([\d.]+)\s*'
-            r'CallOI:([\d.]+)\s*PutOI:([\d.]+)\s*CPutOIRatio:([\d.]+)\s*'
+            r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
+            r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)\s*'
             r'USD\s*([\d.]+)',
-            html
+            html_clean
         )
         if header_match:
             header = {
@@ -131,9 +133,9 @@ def fetch_detail(code):
         else:
             # Try alternate pattern without USD
             header_match2 = re.search(
-                r'CallVol:([\d.]+)\s*PutVol:([\d.]+)\s*CPRatio:([\d.]+)\s*'
-                r'CallOI:([\d.]+)\s*PutOI:([\d.]+)\s*CPutOIRatio:([\d.]+)',
-                html
+                r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
+                r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)',
+                html_clean
             )
             if header_match2:
                 header = {
