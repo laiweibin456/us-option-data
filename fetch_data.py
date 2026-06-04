@@ -31,6 +31,20 @@ SESSION.headers.update({
 })
 
 
+def strip_html(text):
+    """Remove all HTML tags and decode entities."""
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+    text = text.replace('&nbsp;', ' ').strip()
+    return text
+
+
+def extract_td_texts(tr_html):
+    """Extract plain text from all <td> cells in a <tr> row."""
+    tds = re.findall(r'<td[^>]*>(.*?)</td>', tr_html, re.DOTALL)
+    return [strip_html(td) for td in tds]
+
+
 def fetch_main():
     """Fetch main page and parse summary list + date list."""
     print(f"[{datetime.now():%H:%M:%S}] Fetching main page...")
@@ -38,33 +52,20 @@ def fetch_main():
     resp.raise_for_status()
     html = resp.text
 
-    # Parse summary rows
-    row_pattern = re.compile(
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>\s*'
-        r'<td[^>]*>(?:<nobr>)?(.*?)(?:</nobr>)?</td>.*?</tr>',
-        re.DOTALL
-    )
+    # Parse summary rows: extract each <tr> row, then extract <td> cells
+    row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
 
     summaries = []
     for m in row_pattern.finditer(html):
-        cols = [re.sub(r'<[^>]+>', '', c).strip() for c in m.groups()]
+        row = m.group(1)
+        cols = extract_td_texts(row)
         if len(cols) >= 14:
-            code_match = re.search(r'ucode=([^"\']+)', cols[0])
-            code = code_match.group(1) if code_match else cols[0]
-            name_match = re.search(r'>([^<]+)<', cols[1])
-            name = name_match.group(1) if name_match else cols[1]
+            # First column contains the code (may have link text)
+            code = cols[0].strip()
+            name = cols[1].strip()
+            # Skip header row
+            if code in ('', 'option', 'Code') or name in ('', 'name'):
+                continue
 
             def pf(s):
                 try: return float(s.replace(',', '').replace('%', ''))
@@ -126,49 +127,45 @@ def fetch_detail(code):
                 "underlyingPrice": float(header_match.group(7)),
             }
 
-        # Parse contract rows
-        detail_pattern = re.compile(
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>\s*'
-            r'<td[^>]*>(?:<nobr>)?([^<]*)(?:</nobr>)?</td>.*?</tr>',
-            re.DOTALL
-        )
+        # Parse contract rows: extract each <tr>, then extract all <td> cells
+        row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
 
         contracts = []
-        for m in detail_pattern.finditer(html):
-            cols = [c.strip() for c in m.groups()]
+        for m in row_pattern.finditer(html):
+            row = m.group(1)
+            cols = extract_td_texts(row)
+            # Detail rows have 12+ columns: Call option, price, delta, volume, IV, OI, [Contract size], Put option, priceP, deltaP, volumeP, IV_P, OI_P, [Contract sizeP], ...
+            if len(cols) >= 12:
+                call_opt = cols[0].strip()
+                # Skip header row
+                if call_opt in ('', 'option') or 'Call' in call_opt and 'Put' in call_opt:
+                    continue
+                # Must look like a contract: contains _Call or _Put
+                if '_Call' not in call_opt and '_Put' not in call_opt:
+                    continue
 
-            def pf(s):
-                try: return float(s.replace(',', '').replace('%', ''))
-                except: return 0.0
+                def pf(s):
+                    try: return float(s.replace(',', '').replace('%', ''))
+                    except: return 0.0
 
-            def pi(s):
-                try: return int(float(s.replace(',', '')))
-                except: return 0
+                def pi(s):
+                    try: return int(float(s.replace(',', '')))
+                    except: return 0
 
-            contracts.append({
-                "callOption": cols[0],
-                "callPrice": pf(cols[1]),
-                "callDelta": pf(cols[2]),
-                "callVolume": pi(cols[3]),
-                "callIv": pf(cols[4]),
-                "callOi": pi(cols[5]),
-                "putOption": cols[6],
-                "putPrice": pf(cols[7]),
-                "putDelta": pf(cols[8]),
-                "putVolume": pi(cols[9]),
-                "putIv": pf(cols[10]),
-                "putOi": pi(cols[11]),
-            })
+                contracts.append({
+                    "callOption": call_opt,
+                    "callPrice": pf(cols[1]),
+                    "callDelta": pf(cols[2]),
+                    "callVolume": pi(cols[3]),
+                    "callIv": pf(cols[4]),
+                    "callOi": pi(cols[5]),
+                    "putOption": cols[6] if len(cols) > 6 else "",
+                    "putPrice": pf(cols[7]) if len(cols) > 7 else 0,
+                    "putDelta": pf(cols[8]) if len(cols) > 8 else 0,
+                    "putVolume": pi(cols[9]) if len(cols) > 9 else 0,
+                    "putIv": pf(cols[10]) if len(cols) > 10 else 0,
+                    "putOi": pi(cols[11]) if len(cols) > 11 else 0,
+                })
 
         return code, {"header": header, "contracts": contracts}
     except Exception as e:
