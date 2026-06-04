@@ -109,44 +109,54 @@ def fetch_detail(code):
         html = resp.text
 
         # Parse header info
-        # Format: CallVol: 252871 PutVol: 56970 &nbsp;&nbsp;&nbsp;CPRatio:4.44 ... CPutOIRatio:3.87USD 5.17
-        # Note: &nbsp; entities between fields, no space between CPutOIRatio value and "USD"
-        # First, normalize &nbsp; to spaces
-        html_clean = html.replace('&nbsp;', ' ')
+        # Format varies: some pages have USD price, some don't, some have HTML tags mixed in
+        # Step 1: Find the line containing CallVol
+        # Step 2: Strip all HTML tags, then match with regex
         header = {}
-        header_match = re.search(
-            r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
-            r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)\s*'
-            r'USD\s*([\d.]+)',
-            html_clean
-        )
-        if header_match:
-            header = {
-                "callVolume": float(header_match.group(1)),
-                "putVolume": float(header_match.group(2)),
-                "cpRatio": float(header_match.group(3)),
-                "callOi": float(header_match.group(4)),
-                "putOi": float(header_match.group(5)),
-                "cputOiRatio": float(header_match.group(6)),
-                "underlyingPrice": float(header_match.group(7)),
-            }
-        else:
-            # Try alternate pattern without USD
-            header_match2 = re.search(
+        callvol_idx = html.find('CallVol:')
+        if callvol_idx >= 0:
+            # Extract a chunk around CallVol (up to 500 chars should cover the whole header)
+            header_chunk = html[callvol_idx:callvol_idx + 500]
+            # Remove HTML tags and &nbsp;
+            header_chunk = re.sub(r'<[^>]+>', ' ', header_chunk)
+            header_chunk = header_chunk.replace('&nbsp;', ' ')
+            # Collapse multiple spaces
+            header_chunk = re.sub(r'\s+', ' ', header_chunk)
+
+            # Try with USD price
+            header_match = re.search(
                 r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
-                r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)',
-                html_clean
+                r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)\s*'
+                r'USD\s*([\d.]+)',
+                header_chunk
             )
-            if header_match2:
+            if header_match:
                 header = {
-                    "callVolume": float(header_match2.group(1)),
-                    "putVolume": float(header_match2.group(2)),
-                    "cpRatio": float(header_match2.group(3)),
-                    "callOi": float(header_match2.group(4)),
-                    "putOi": float(header_match2.group(5)),
-                    "cputOiRatio": float(header_match2.group(6)),
-                    "underlyingPrice": 0,
+                    "callVolume": float(header_match.group(1)),
+                    "putVolume": float(header_match.group(2)),
+                    "cpRatio": float(header_match.group(3)),
+                    "callOi": float(header_match.group(4)),
+                    "putOi": float(header_match.group(5)),
+                    "cputOiRatio": float(header_match.group(6)),
+                    "underlyingPrice": float(header_match.group(7)),
                 }
+            else:
+                # Try without USD price
+                header_match2 = re.search(
+                    r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
+                    r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)',
+                    header_chunk
+                )
+                if header_match2:
+                    header = {
+                        "callVolume": float(header_match2.group(1)),
+                        "putVolume": float(header_match2.group(2)),
+                        "cpRatio": float(header_match2.group(3)),
+                        "callOi": float(header_match2.group(4)),
+                        "putOi": float(header_match2.group(5)),
+                        "cputOiRatio": float(header_match2.group(6)),
+                        "underlyingPrice": 0,
+                    }
 
         # Parse contract rows: extract each <tr>, then extract all <td> cells
         # HTML structure: Call option(0), price(1), delta(2), volume(3), IV(4), OI(5), ContractSize(6),
