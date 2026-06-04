@@ -109,6 +109,8 @@ def fetch_detail(code):
         html = resp.text
 
         # Parse header info
+        # Format: CallVol:236472 PutVol:61571 CPRatio:3.84 CallOI:568342 PutOI:146844 CPutOIRatio:3.87USD 5.17
+        # Note: no space between CPutOIRatio value and "USD"
         header = {}
         header_match = re.search(
             r'CallVol:([\d.]+)\s*PutVol:([\d.]+)\s*CPRatio:([\d.]+)\s*'
@@ -126,46 +128,68 @@ def fetch_detail(code):
                 "cputOiRatio": float(header_match.group(6)),
                 "underlyingPrice": float(header_match.group(7)),
             }
+        else:
+            # Try alternate pattern without USD
+            header_match2 = re.search(
+                r'CallVol:([\d.]+)\s*PutVol:([\d.]+)\s*CPRatio:([\d.]+)\s*'
+                r'CallOI:([\d.]+)\s*PutOI:([\d.]+)\s*CPutOIRatio:([\d.]+)',
+                html
+            )
+            if header_match2:
+                header = {
+                    "callVolume": float(header_match2.group(1)),
+                    "putVolume": float(header_match2.group(2)),
+                    "cpRatio": float(header_match2.group(3)),
+                    "callOi": float(header_match2.group(4)),
+                    "putOi": float(header_match2.group(5)),
+                    "cputOiRatio": float(header_match2.group(6)),
+                    "underlyingPrice": 0,
+                }
 
         # Parse contract rows: extract each <tr>, then extract all <td> cells
+        # HTML structure: Call option(0), price(1), delta(2), volume(3), IV(4), OI(5), ContractSize(6),
+        #                 Put option(7), priceP(8), deltaP(9), volumeP(10), IV_P(11), OI_P(12), ContractSizeP(13), extra(14-15)
         row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
 
         contracts = []
         for m in row_pattern.finditer(html):
             row = m.group(1)
             cols = extract_td_texts(row)
-            # Detail rows have 12+ columns: Call option, price, delta, volume, IV, OI, [Contract size], Put option, priceP, deltaP, volumeP, IV_P, OI_P, [Contract sizeP], ...
-            if len(cols) >= 12:
-                call_opt = cols[0].strip()
-                # Skip header row
-                if call_opt in ('', 'option') or 'Call' in call_opt and 'Put' in call_opt:
-                    continue
-                # Must look like a contract: contains _Call or _Put
-                if '_Call' not in call_opt and '_Put' not in call_opt:
-                    continue
+            if len(cols) < 13:
+                continue
 
-                def pf(s):
-                    try: return float(s.replace(',', '').replace('%', ''))
-                    except: return 0.0
+            call_opt = cols[0].strip()
+            # Skip header row
+            if not call_opt or call_opt == 'option':
+                continue
+            # Must look like a contract: contains _Call
+            if '_Call' not in call_opt:
+                continue
 
-                def pi(s):
-                    try: return int(float(s.replace(',', '')))
-                    except: return 0
+            def pf(s):
+                try: return float(s.replace(',', '').replace('%', ''))
+                except: return 0.0
 
-                contracts.append({
-                    "callOption": call_opt,
-                    "callPrice": pf(cols[1]),
-                    "callDelta": pf(cols[2]),
-                    "callVolume": pi(cols[3]),
-                    "callIv": pf(cols[4]),
-                    "callOi": pi(cols[5]),
-                    "putOption": cols[6] if len(cols) > 6 else "",
-                    "putPrice": pf(cols[7]) if len(cols) > 7 else 0,
-                    "putDelta": pf(cols[8]) if len(cols) > 8 else 0,
-                    "putVolume": pi(cols[9]) if len(cols) > 9 else 0,
-                    "putIv": pf(cols[10]) if len(cols) > 10 else 0,
-                    "putOi": pi(cols[11]) if len(cols) > 11 else 0,
-                })
+            def pi(s):
+                try: return int(float(s.replace(',', '')))
+                except: return 0
+
+            put_opt = cols[7].strip() if len(cols) > 7 else ""
+
+            contracts.append({
+                "callOption": call_opt,
+                "callPrice": pf(cols[1]),
+                "callDelta": pf(cols[2]),
+                "callVolume": pi(cols[3]),
+                "callIv": pf(cols[4]),
+                "callOi": pi(cols[5]),
+                "putOption": put_opt,
+                "putPrice": pf(cols[8]) if len(cols) > 8 else 0,
+                "putDelta": pf(cols[9]) if len(cols) > 9 else 0,
+                "putVolume": pi(cols[10]) if len(cols) > 10 else 0,
+                "putIv": pf(cols[11]) if len(cols) > 11 else 0,
+                "putOi": pi(cols[12]) if len(cols) > 12 else 0,
+            })
 
         return code, {"header": header, "contracts": contracts}
     except Exception as e:
