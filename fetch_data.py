@@ -94,14 +94,22 @@ def fetch_main():
                 "netSpD": pf(cols[13]),
             })
 
-    date_pattern = re.compile(r'<a[^>]*href="archive/([^"]+)"[^>]*>([^<]+)</a>')
+    # Build date list from archive directories (only dates we actually have data for)
+    archive_base = os.path.join(DOCS_DIR, "archive")
     dates = []
-    for m in date_pattern.finditer(html):
-        date_file = m.group(1)
-        date_label = m.group(2).strip()
-        dates.append({"label": date_label, "file": date_file})
+    if os.path.isdir(archive_base):
+        for dirname in sorted(os.listdir(archive_base), reverse=True):
+            dirpath = os.path.join(archive_base, dirname)
+            if os.path.isdir(dirpath) and re.match(r'\d{4}-\d{2}-\d{2}', dirname):
+                # Format label: "2026-06-09" -> "Jun 09"
+                try:
+                    dt = datetime.strptime(dirname, "%Y-%m-%d")
+                    label = dt.strftime("%b %d")
+                except:
+                    label = dirname
+                dates.append({"label": label, "date": dirname})
 
-    print(f"[{datetime.now():%H:%M:%S}] Parsed {len(summaries)} summaries, {len(dates)} dates")
+    print(f"[{datetime.now():%H:%M:%S}] Parsed {len(summaries)} summaries, {len(dates)} archive dates")
     return summaries, dates
 
 
