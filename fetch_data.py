@@ -3,9 +3,11 @@
 Fetch US option data from riskalertsys.com and save as JSON.
 
 Outputs:
-  docs/index.json    - Main summary list (all 172 codes)
-  docs/dates.json    - Available date list
-  docs/detail/XX.json - Detail page for each code (e.g., docs/detail/SOXS.json)
+  docs/index.json              - Latest summary list (all codes)
+  docs/dates.json              - Available date list
+  docs/detail/XX.json          - Latest detail page for each code
+  docs/archive/YYYY-MM-DD/index.json  - Historical summary for each day
+  docs/archive/YYYY-MM-DD/detail/XX.json - Historical detail for each day
 """
 
 import json
@@ -13,6 +15,7 @@ import os
 import re
 import sys
 import time
+import shutil
 import concurrent.futures
 from datetime import datetime
 
@@ -22,8 +25,14 @@ BASE_URL = "https://riskalertsys.com/~o~options/US/"
 DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
 DETAIL_DIR = os.path.join(DOCS_DIR, "detail")
 
+# Today's date for archive
+TODAY = datetime.utcnow().strftime("%Y-%m-%d")
+ARCHIVE_DIR = os.path.join(DOCS_DIR, "archive", TODAY)
+ARCHIVE_DETAIL_DIR = os.path.join(ARCHIVE_DIR, "detail")
+
 # Ensure output directories exist
 os.makedirs(DETAIL_DIR, exist_ok=True)
+os.makedirs(ARCHIVE_DETAIL_DIR, exist_ok=True)
 
 SESSION = requests.Session()
 SESSION.headers.update({
@@ -52,7 +61,6 @@ def fetch_main():
     resp.raise_for_status()
     html = resp.text
 
-    # Parse summary rows: extract each <tr> row, then extract <td> cells
     row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
 
     summaries = []
@@ -60,10 +68,8 @@ def fetch_main():
         row = m.group(1)
         cols = extract_td_texts(row)
         if len(cols) >= 14:
-            # First column contains the code (may have link text)
             code = cols[0].strip()
             name = cols[1].strip()
-            # Skip header row
             if code in ('', 'option', 'Code') or name in ('', 'name'):
                 continue
 
@@ -88,7 +94,6 @@ def fetch_main():
                 "netSpD": pf(cols[13]),
             })
 
-    # Parse date list
     date_pattern = re.compile(r'<a[^>]*href="archive/([^"]+)"[^>]*>([^<]+)</a>')
     dates = []
     for m in date_pattern.finditer(html):
@@ -109,21 +114,14 @@ def fetch_detail(code):
         html = resp.text
 
         # Parse header info
-        # Format varies: some pages have USD price, some don't, some have HTML tags mixed in
-        # Step 1: Find the line containing CallVol
-        # Step 2: Strip all HTML tags, then match with regex
         header = {}
         callvol_idx = html.find('CallVol:')
         if callvol_idx >= 0:
-            # Extract a chunk around CallVol (up to 500 chars should cover the whole header)
             header_chunk = html[callvol_idx:callvol_idx + 500]
-            # Remove HTML tags and &nbsp;
             header_chunk = re.sub(r'<[^>]+>', ' ', header_chunk)
             header_chunk = header_chunk.replace('&nbsp;', ' ')
-            # Collapse multiple spaces
             header_chunk = re.sub(r'\s+', ' ', header_chunk)
 
-            # Try with USD price
             header_match = re.search(
                 r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
                 r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)\s*'
@@ -141,7 +139,6 @@ def fetch_detail(code):
                     "underlyingPrice": float(header_match.group(7)),
                 }
             else:
-                # Try without USD price
                 header_match2 = re.search(
                     r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
                     r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)',
@@ -158,9 +155,7 @@ def fetch_detail(code):
                         "underlyingPrice": 0,
                     }
 
-        # Parse contract rows: extract each <tr>, then extract all <td> cells
-        # HTML structure: Call option(0), price(1), delta(2), volume(3), IV(4), OI(5), ContractSize(6),
-        #                 Put option(7), priceP(8), deltaP(9), volumeP(10), IV_P(11), OI_P(12), ContractSizeP(13), extra(14-15)
+        # Parse contract rows
         row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
 
         contracts = []
@@ -171,10 +166,8 @@ def fetch_detail(code):
                 continue
 
             call_opt = cols[0].strip()
-            # Skip header row
             if not call_opt or call_opt == 'option':
                 continue
-            # Must look like a contract: contains _Call
             if '_Call' not in call_opt:
                 continue
 
@@ -219,15 +212,23 @@ def main():
         print("ERROR: No summaries found, aborting")
         sys.exit(1)
 
-    # Save main list
+    # Build index data
     index_data = {
         "updated": datetime.utcnow().isoformat() + "Z",
+        "date": TODAY,
         "count": len(summaries),
         "data": summaries
     }
+
+    # Save to docs/ (latest)
     with open(os.path.join(DOCS_DIR, "index.json"), "w", encoding="utf-8") as f:
         json.dump(index_data, f, ensure_ascii=False, separators=(',', ':'))
     print(f"Saved index.json ({len(summaries)} codes)")
+
+    # Save to docs/archive/YYYY-MM-DD/ (historical)
+    with open(os.path.join(ARCHIVE_DIR, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(index_data, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"Saved archive/{TODAY}/index.json")
 
     # Save date list
     with open(os.path.join(DOCS_DIR, "dates.json"), "w", encoding="utf-8") as f:
@@ -245,9 +246,16 @@ def main():
         for future in concurrent.futures.as_completed(futures):
             code, result = future.result()
             if result is not None:
+                # Save to docs/detail/ (latest)
                 filepath = os.path.join(DETAIL_DIR, f"{code}.json")
                 with open(filepath, "w", encoding="utf-8") as f:
                     json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
+
+                # Save to docs/archive/YYYY-MM-DD/detail/ (historical)
+                archive_filepath = os.path.join(ARCHIVE_DETAIL_DIR, f"{code}.json")
+                with open(archive_filepath, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
+
                 success += 1
                 if success % 10 == 0:
                     elapsed = time.time() - start_time
@@ -257,6 +265,8 @@ def main():
 
     elapsed = time.time() - start_time
     print(f"\nDone! {success} success, {fail} failed, {elapsed:.0f}s total")
+    print(f"Latest data: docs/")
+    print(f"Archive data: docs/archive/{TODAY}/")
 
 
 if __name__ == "__main__":
