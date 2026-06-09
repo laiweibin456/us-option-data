@@ -4,8 +4,13 @@ on:
   # Run daily at 05:30 Beijing time (21:30 UTC previous day)
   schedule:
     - cron: '30 21 * * *'
-  # Allow manual trigger
+  # Allow manual trigger with optional date parameter for backfill
   workflow_dispatch:
+    inputs:
+      backfill_date:
+        description: 'Date to backfill (YYYY-MM-DD), leave empty for daily fetch'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -29,8 +34,13 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch data
+      - name: Fetch daily data
+        if: ${{ github.event.inputs.backfill_date == '' }}
         run: python fetch_data.py
+
+      - name: Backfill specific date
+        if: ${{ github.event.inputs.backfill_date != '' }}
+        run: python backfill.py --date ${{ github.event.inputs.backfill_date }}
 
       - name: Commit and push
         run: |
