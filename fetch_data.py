@@ -25,14 +25,26 @@ BASE_URL = "https://riskalertsys.com/~o~options/US/"
 DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
 DETAIL_DIR = os.path.join(DOCS_DIR, "detail")
 
-# Today's date for archive
-TODAY = datetime.utcnow().strftime("%Y-%m-%d")
-ARCHIVE_DIR = os.path.join(DOCS_DIR, "archive", TODAY)
-ARCHIVE_DETAIL_DIR = os.path.join(ARCHIVE_DIR, "detail")
+# Will be set from website's "last updated" timestamp
+TODAY = None
+ARCHIVE_DIR = None
+ARCHIVE_DETAIL_DIR = None
 
 # Ensure output directories exist
 os.makedirs(DETAIL_DIR, exist_ok=True)
-os.makedirs(ARCHIVE_DETAIL_DIR, exist_ok=True)
+
+
+def detect_date_from_html(html):
+    """Extract the data date from website's 'last updated' timestamp."""
+    m = re.search(r'last updated:\s*(\d{4})-(\d{2})-(\d{2})\s+\d{2}:\d{2}:\d{2}', html)
+    if m:
+        date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        print(f"  Detected data date from website: {date_str}")
+        return date_str
+    # Fallback to UTC date
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    print(f"  Could not detect date from website, using UTC: {date_str}")
+    return date_str
 
 SESSION = requests.Session()
 SESSION.headers.update({
@@ -60,6 +72,13 @@ def fetch_main():
     resp = SESSION.get(BASE_URL + "index.php", timeout=120)
     resp.raise_for_status()
     html = resp.text
+
+    # Detect data date from website
+    global TODAY, ARCHIVE_DIR, ARCHIVE_DETAIL_DIR
+    TODAY = detect_date_from_html(html)
+    ARCHIVE_DIR = os.path.join(DOCS_DIR, "archive", TODAY)
+    ARCHIVE_DETAIL_DIR = os.path.join(ARCHIVE_DIR, "detail")
+    os.makedirs(ARCHIVE_DETAIL_DIR, exist_ok=True)
 
     row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
 
@@ -95,22 +114,27 @@ def fetch_main():
             })
 
     # Build date list from archive directories (only dates we actually have data for)
+    dates = build_dates_list()
+
+    print(f"[{datetime.now():%H:%M:%S}] Parsed {len(summaries)} summaries, {len(dates)} archive dates")
+    return summaries, dates
+
+
+def build_dates_list():
+    """Build date list from archive directories."""
     archive_base = os.path.join(DOCS_DIR, "archive")
     dates = []
     if os.path.isdir(archive_base):
         for dirname in sorted(os.listdir(archive_base), reverse=True):
             dirpath = os.path.join(archive_base, dirname)
             if os.path.isdir(dirpath) and re.match(r'\d{4}-\d{2}-\d{2}', dirname):
-                # Format label: "2026-06-09" -> "Jun 09"
                 try:
                     dt = datetime.strptime(dirname, "%Y-%m-%d")
                     label = dt.strftime("%b %d")
                 except:
                     label = dirname
                 dates.append({"label": label, "date": dirname})
-
-    print(f"[{datetime.now():%H:%M:%S}] Parsed {len(summaries)} summaries, {len(dates)} archive dates")
-    return summaries, dates
+    return dates
 
 
 def fetch_detail(code):
@@ -219,6 +243,20 @@ def main():
     if not summaries:
         print("ERROR: No summaries found, aborting")
         sys.exit(1)
+
+    # Check if data for this date already exists
+    existing_index = os.path.join(ARCHIVE_DIR, "index.json")
+    if os.path.exists(existing_index):
+        with open(existing_index, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+        if existing.get("count") == len(summaries) and existing.get("date") == TODAY:
+            print(f"Data for {TODAY} already exists and has same count ({len(summaries)}), skipping")
+            # Still update dates.json in case new archive dirs were added
+            dates = build_dates_list()
+            with open(os.path.join(DOCS_DIR, "dates.json"), "w", encoding="utf-8") as f:
+                json.dump(dates, f, ensure_ascii=False, separators=(',', ':'))
+            print(f"Updated dates.json ({len(dates)} dates)")
+            return
 
     # Build index data
     index_data = {

@@ -62,11 +62,20 @@ def get_available_dates():
 
 
 def fetch_archive_summary(date_str):
-    """Fetch archive page for a date and parse summary data."""
+    """Fetch archive page for a date and parse summary data.
+    If the date is today (not in archive), fetch from main page instead."""
     try:
+        # Try archive page first
         url = BASE_URL + f"archive/{date_str}.html"
         print(f"[{datetime.now():%H:%M:%S}] Fetching archive {date_str}...")
         resp = SESSION.get(url, timeout=120)
+
+        if resp.status_code == 404:
+            # Date not in archive, try main page (today's data)
+            print(f"  {date_str} not in archive, trying main page...")
+            url = BASE_URL + "index.php"
+            resp = SESSION.get(url, timeout=120)
+
         resp.raise_for_status()
         html = resp.text
 
@@ -205,6 +214,7 @@ def main():
     parser.add_argument("--days", type=int, default=0, help="Only backfill last N days")
     parser.add_argument("--date", type=str, help="Only backfill specific date (YYYY-MM-DD)")
     parser.add_argument("--summary-only", action="store_true", help="Only fetch summary, skip detail pages")
+    parser.add_argument("--force", action="store_true", help="Force overwrite existing data")
     args = parser.parse_args()
 
     start_time = time.time()
@@ -214,6 +224,7 @@ def main():
 
     # Filter dates
     if args.date:
+        # Allow specific date even if not in archive list (e.g., today)
         target_dates = [args.date]
     elif args.days > 0:
         cutoff = (datetime.utcnow() - timedelta(days=args.days)).strftime("%Y-%m-%d")
@@ -221,9 +232,12 @@ def main():
     else:
         target_dates = all_dates
 
-    # Skip dates that already have COMPLETE data (summary + detail)
+    # Skip dates that already have COMPLETE data (summary + detail), unless --force
     dates_to_fetch = []
     for d in target_dates:
+        if args.force:
+            dates_to_fetch.append(d)
+            continue
         archive_dir = os.path.join(DOCS_DIR, "archive", d)
         index_file = os.path.join(archive_dir, "index.json")
         detail_dir = os.path.join(archive_dir, "detail")

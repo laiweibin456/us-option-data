@@ -1,9 +1,9 @@
 name: Fetch US Option Data
 
 on:
-  # Run daily at 05:30 Beijing time (21:30 UTC previous day)
+  # Run daily at 20:10 Beijing time (12:10 UTC)
   schedule:
-    - cron: '30 21 * * *'
+    - cron: '10 12 * * *'
   # Allow manual trigger with optional date parameter for backfill
   workflow_dispatch:
     inputs:
@@ -11,6 +11,14 @@ on:
         description: 'Date to backfill (YYYY-MM-DD), leave empty for daily fetch'
         required: false
         default: ''
+      force_overwrite:
+        description: 'Force overwrite existing data (true/false)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
   contents: write
@@ -40,7 +48,12 @@ jobs:
 
       - name: Backfill specific date
         if: ${{ github.event.inputs.backfill_date != '' }}
-        run: python backfill.py --date ${{ github.event.inputs.backfill_date }}
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ github.event.inputs.force_overwrite }}" = "true" ]; then
+            EXTRA_ARGS="--force"
+          fi
+          python backfill.py --date ${{ github.event.inputs.backfill_date }} $EXTRA_ARGS
 
       - name: Commit and push
         run: |
