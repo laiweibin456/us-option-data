@@ -3,11 +3,9 @@
 Fetch US option data from riskalertsys.com and save as JSON.
 
 Outputs:
-  docs/index.json              - Latest summary list (all codes)
-  docs/dates.json              - Available date list
-  docs/detail/XX.json          - Latest detail page for each code
-  docs/archive/YYYY-MM-DD/index.json  - Historical summary for each day
-  docs/archive/YYYY-MM-DD/detail/XX.json - Historical detail for each day
+  docs/dates.json                              - Available date list
+  docs/archive/YYYY-MM-DD/index.json           - Historical summary for each day
+  docs/archive/YYYY-MM-DD/detail/XX.json       - Historical detail for each day
 """
 
 import json
@@ -15,7 +13,6 @@ import os
 import re
 import sys
 import time
-import shutil
 import concurrent.futures
 from datetime import datetime
 
@@ -23,15 +20,16 @@ import requests
 
 BASE_URL = "https://riskalertsys.com/~o~options/US/"
 DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
-DETAIL_DIR = os.path.join(DOCS_DIR, "detail")
 
 # Will be set from website's "last updated" timestamp
 TODAY = None
 ARCHIVE_DIR = None
 ARCHIVE_DETAIL_DIR = None
 
-# Ensure output directories exist
-os.makedirs(DETAIL_DIR, exist_ok=True)
+SESSION = requests.Session()
+SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+})
 
 
 def detect_date_from_html(html):
@@ -41,15 +39,9 @@ def detect_date_from_html(html):
         date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
         print(f"  Detected data date from website: {date_str}")
         return date_str
-    # Fallback to UTC date
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     print(f"  Could not detect date from website, using UTC: {date_str}")
     return date_str
-
-SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-})
 
 
 def strip_html(text):
@@ -113,7 +105,7 @@ def fetch_main():
                 "netSpD": pf(cols[13]),
             })
 
-    # Build date list from archive directories (only dates we actually have data for)
+    # Build date list from archive directories
     dates = build_dates_list()
 
     print(f"[{datetime.now():%H:%M:%S}] Parsed {len(summaries)} summaries, {len(dates)} archive dates")
@@ -244,20 +236,6 @@ def main():
         print("ERROR: No summaries found, aborting")
         sys.exit(1)
 
-    # Check if data for this date already exists
-    existing_index = os.path.join(ARCHIVE_DIR, "index.json")
-    if os.path.exists(existing_index):
-        with open(existing_index, "r", encoding="utf-8") as f:
-            existing = json.load(f)
-        if existing.get("count") == len(summaries) and existing.get("date") == TODAY:
-            print(f"Data for {TODAY} already exists and has same count ({len(summaries)}), skipping")
-            # Still update dates.json in case new archive dirs were added
-            dates = build_dates_list()
-            with open(os.path.join(DOCS_DIR, "dates.json"), "w", encoding="utf-8") as f:
-                json.dump(dates, f, ensure_ascii=False, separators=(',', ':'))
-            print(f"Updated dates.json ({len(dates)} dates)")
-            return
-
     # Build index data
     index_data = {
         "updated": datetime.utcnow().isoformat() + "Z",
@@ -266,17 +244,13 @@ def main():
         "data": summaries
     }
 
-    # Save to docs/ (latest)
-    with open(os.path.join(DOCS_DIR, "index.json"), "w", encoding="utf-8") as f:
-        json.dump(index_data, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"Saved index.json ({len(summaries)} codes)")
-
-    # Save to docs/archive/YYYY-MM-DD/ (historical)
+    # Save to docs/archive/YYYY-MM-DD/ only
     with open(os.path.join(ARCHIVE_DIR, "index.json"), "w", encoding="utf-8") as f:
         json.dump(index_data, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"Saved archive/{TODAY}/index.json")
+    print(f"Saved archive/{TODAY}/index.json ({len(summaries)} codes)")
 
     # Save date list
+    dates = build_dates_list()
     with open(os.path.join(DOCS_DIR, "dates.json"), "w", encoding="utf-8") as f:
         json.dump(dates, f, ensure_ascii=False, separators=(',', ':'))
     print(f"Saved dates.json ({len(dates)} dates)")
@@ -292,12 +266,7 @@ def main():
         for future in concurrent.futures.as_completed(futures):
             code, result = future.result()
             if result is not None:
-                # Save to docs/detail/ (latest)
-                filepath = os.path.join(DETAIL_DIR, f"{code}.json")
-                with open(filepath, "w", encoding="utf-8") as f:
-                    json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
-
-                # Save to docs/archive/YYYY-MM-DD/detail/ (historical)
+                # Save to docs/archive/YYYY-MM-DD/detail/ only
                 archive_filepath = os.path.join(ARCHIVE_DETAIL_DIR, f"{code}.json")
                 with open(archive_filepath, "w", encoding="utf-8") as f:
                     json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
@@ -311,7 +280,6 @@ def main():
 
     elapsed = time.time() - start_time
     print(f"\nDone! {success} success, {fail} failed, {elapsed:.0f}s total")
-    print(f"Latest data: docs/")
     print(f"Archive data: docs/archive/{TODAY}/")
 
 
