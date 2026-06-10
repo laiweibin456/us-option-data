@@ -119,10 +119,14 @@ def fetch_archive_summary(date_str):
         return date_str, None
 
 
-def fetch_detail(code):
-    """Fetch detail page for a single code."""
+def fetch_detail(code, date_str=None):
+    """Fetch detail page for a single code.
+    If date_str is provided, fetches historical data for that date."""
     try:
-        url = BASE_URL + f"index.php?ucode={code}"
+        if date_str:
+            url = BASE_URL + f"index.php?ucode={code}&date={date_str}"
+        else:
+            url = BASE_URL + f"index.php?ucode={code}"
         resp = SESSION.get(url, timeout=120)
         resp.raise_for_status()
         html = resp.text
@@ -289,7 +293,7 @@ def main():
 
         print(f"  Fetching {len(codes)} detail pages for {date_str}...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(fetch_detail, code): code for code in codes}
+            futures = {executor.submit(fetch_detail, code, date_str): code for code in codes}
             for future in concurrent.futures.as_completed(futures):
                 code, result = future.result()
                 if result is not None:
