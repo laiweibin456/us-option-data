@@ -1,9 +1,9 @@
 name: Fetch US Option Data
 
 on:
-  # Run daily at 20:10 Beijing time (12:10 UTC)
+  # Run daily at 06:00 Beijing time (22:00 UTC)
   schedule:
-    - cron: '10 12 * * *'
+    - cron: '0 22 * * *'
   # Allow manual trigger with optional date parameter for backfill
   workflow_dispatch:
     inputs:
