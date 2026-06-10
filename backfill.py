@@ -288,6 +288,7 @@ def main():
 
         # Fetch detail pages for this date
         codes = [s["code"] for s in summaries]
+        summary_map = {s["code"]: s for s in summaries}
         success = 0
         fail = 0
 
@@ -300,12 +301,23 @@ def main():
                     filepath = os.path.join(archive_detail_dir, f"{code}.json")
                     with open(filepath, "w", encoding="utf-8") as f:
                         json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
+
+                    # Add underlyingPrice to summary
+                    price = result.get("header", {}).get("underlyingPrice", 0)
+                    if price > 0 and code in summary_map:
+                        summary_map[code]["underlyingPrice"] = price
+
                     success += 1
                     if success % 20 == 0:
                         elapsed = time.time() - start_time
                         print(f"    Progress: {success + fail}/{len(codes)} ({elapsed:.0f}s)")
                 else:
                     fail += 1
+
+        # Re-save index.json with underlyingPrice
+        index_data["data"] = summaries
+        with open(os.path.join(archive_dir, "index.json"), "w", encoding="utf-8") as f:
+            json.dump(index_data, f, ensure_ascii=False, separators=(',', ':'))
 
         print(f"  {date_str} details: {success} success, {fail} failed")
 

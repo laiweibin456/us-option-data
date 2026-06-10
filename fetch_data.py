@@ -264,6 +264,9 @@ def main():
     success = 0
     fail = 0
 
+    # Build a lookup from code to summary dict
+    summary_map = {s["code"]: s for s in summaries}
+
     print(f"\nFetching {len(codes)} detail pages with 5 threads...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(fetch_detail, code, TODAY): code for code in codes}
@@ -275,12 +278,23 @@ def main():
                 with open(archive_filepath, "w", encoding="utf-8") as f:
                     json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
 
+                # Add underlyingPrice to summary
+                price = result.get("header", {}).get("underlyingPrice", 0)
+                if price > 0 and code in summary_map:
+                    summary_map[code]["underlyingPrice"] = price
+
                 success += 1
                 if success % 10 == 0:
                     elapsed = time.time() - start_time
                     print(f"  Progress: {success + fail}/{len(codes)} ({elapsed:.0f}s)")
             else:
                 fail += 1
+
+    # Re-save index.json with underlyingPrice added
+    index_data["data"] = summaries
+    with open(os.path.join(ARCHIVE_DIR, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(index_data, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"Updated archive/{TODAY}/index.json with underlyingPrice")
 
     elapsed = time.time() - start_time
     print(f"\nDone! {success} success, {fail} failed, {elapsed:.0f}s total")
