@@ -230,6 +230,23 @@ def fetch_detail(code, date_str=None):
         return code, None
 
 
+def is_low_quality_data(summaries):
+    """Check if summary data is low quality (most codes have zero volume/OI).
+
+    Returns True if more than half of codes have all key volume/OI fields as 0,
+    which indicates the website is showing empty/placeholder data (e.g. on weekends).
+    """
+    if not summaries:
+        return True
+    zero_count = 0
+    for s in summaries:
+        if (s.get('cDVol', 0) == 0 and s.get('cDOI', 0) == 0 and
+                s.get('pDVol', 0) == 0 and s.get('pDOI', 0) == 0 and
+                s.get('netDOI', 0) == 0):
+            zero_count += 1
+    return zero_count > len(summaries) // 2
+
+
 def main():
     start_time = time.time()
 
@@ -239,6 +256,22 @@ def main():
     if not summaries:
         print("ERROR: No summaries found, aborting")
         sys.exit(1)
+
+    # Check data quality - skip if mostly zeros and existing data present
+    # This prevents weekend runs from overwriting good Friday data with zeros
+    index_path = os.path.join(ARCHIVE_DIR, "index.json")
+    if is_low_quality_data(summaries):
+        zero_count = sum(1 for s in summaries
+                         if s.get('cDVol', 0) == 0 and s.get('cDOI', 0) == 0 and
+                         s.get('pDVol', 0) == 0 and s.get('pDOI', 0) == 0 and
+                         s.get('netDOI', 0) == 0)
+        if os.path.exists(index_path):
+            print(f"WARNING: Low quality data ({zero_count}/{len(summaries)} codes have zero volume/OI).")
+            print(f"Existing data preserved at {index_path}. Skipping save.")
+            return
+        else:
+            print(f"WARNING: Low quality data ({zero_count}/{len(summaries)} codes have zero volume/OI).")
+            print("No existing data, saving anyway.")
 
     # Build index data
     index_data = {
