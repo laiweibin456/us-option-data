@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 
 import requests
 
+from fetch_data import parse_header, write_holidays
+
 BASE_URL = "https://riskalertsys.com/~o~options/US/"
 DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
 
@@ -131,46 +133,19 @@ def fetch_detail(code, date_str=None):
         resp.raise_for_status()
         html = resp.text
 
-        header = {}
-        callvol_idx = html.find('CallVol:')
-        if callvol_idx >= 0:
-            header_chunk = html[callvol_idx:callvol_idx + 500]
-            header_chunk = re.sub(r'<[^>]+>', ' ', header_chunk)
-            header_chunk = header_chunk.replace('&nbsp;', ' ')
-            header_chunk = re.sub(r'\s+', ' ', header_chunk)
+        header = parse_header(html)
 
-            header_match = re.search(
-                r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
-                r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)\s*'
-                r'USD\s*([\d.]+)',
-                header_chunk
-            )
-            if header_match:
-                header = {
-                    "callVolume": float(header_match.group(1)),
-                    "putVolume": float(header_match.group(2)),
-                    "cpRatio": float(header_match.group(3)),
-                    "callOi": float(header_match.group(4)),
-                    "putOi": float(header_match.group(5)),
-                    "cputOiRatio": float(header_match.group(6)),
-                    "underlyingPrice": float(header_match.group(7)),
-                }
-            else:
-                header_match2 = re.search(
-                    r'CallVol:\s*([\d.]+)\s*PutVol:\s*([\d.]+)\s*CPRatio:\s*([\d.]+)\s*'
-                    r'CallOI:\s*([\d.]+)\s*PutOI:\s*([\d.]+)\s*CPutOIRatio:\s*([\d.]+)',
-                    header_chunk
-                )
-                if header_match2:
-                    header = {
-                        "callVolume": float(header_match2.group(1)),
-                        "putVolume": float(header_match2.group(2)),
-                        "cpRatio": float(header_match2.group(3)),
-                        "callOi": float(header_match2.group(4)),
-                        "putOi": float(header_match2.group(5)),
-                        "cputOiRatio": float(header_match2.group(6)),
-                        "underlyingPrice": 0,
-                    }
+        # Backfilling today's date: the historical page may lack the USD price,
+        # the live page still has it.
+        if header.get("underlyingPrice", 0) <= 0 and date_str == datetime.utcnow().strftime("%Y-%m-%d"):
+            try:
+                live = SESSION.get(BASE_URL + f"index.php?ucode={code}", timeout=120)
+                live.raise_for_status()
+                live_price = parse_header(live.text).get("underlyingPrice", 0)
+                if live_price > 0:
+                    header["underlyingPrice"] = live_price
+            except Exception as e:
+                print(f"    {code}: live page price fallback failed: {e}")
 
         row_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
         contracts = []
@@ -298,7 +273,7 @@ def main():
             for future in concurrent.futures.as_completed(futures):
                 code, result = future.result()
                 if result is not None:
-                    filepath = os.path.join(archive_detail_dir, f"{code}.json")
+                    filepath = os.path.join(archive_detail_dir, f"{code.lower()}.json")
                     with open(filepath, "w", encoding="utf-8") as f:
                         json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
 
@@ -338,6 +313,7 @@ def main():
     with open(os.path.join(DOCS_DIR, "dates.json"), "w", encoding="utf-8") as f:
         json.dump(dates, f, ensure_ascii=False, separators=(',', ':'))
     print(f"\nUpdated dates.json ({len(dates)} dates)")
+    write_holidays(dates)
 
     elapsed = time.time() - start_time
     print(f"\nBackfill complete! {elapsed:.0f}s total")
